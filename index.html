@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>ホッカイドウハンガー</title>
+<meta name="description" content="北海道を噴火湾で、凍った鉄棒に引っ掛けるだけの鬼畜ゲーム。1回掛けられたらクリア。あなたは何投目？">
+<!-- ▼Xのカード表示用（公開URLに合わせて書き換える） -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="ホッカイドウハンガー">
+<meta property="og:description" content="北海道を噴火湾で、凍った鉄棒に引っ掛けろ！ 1回掛けられたらクリアの鬼畜ゲーム。あなたは何投目？">
+<meta property="og:url" content="https://nkworks-games.github.io/hokkaido-hanger/">
+<meta property="og:image" content="https://nkworks-games.github.io/hokkaido-hanger/card.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="theme-color" content="#9fd2f5">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;800&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#d9ecf9;overflow:hidden;overscroll-behavior:none}
+body{touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+canvas{display:block;position:absolute;left:0;top:0}
+#sa{position:fixed;left:0;top:0;width:0;height:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);visibility:hidden}
+</style>
+</head>
+<body>
+<div id="sa"></div>
+<canvas id="c"></canvas>
+<noscript>JavaScriptをオンにして遊んでください</noscript>
+<script>
+(() => {
+'use strict';
+// ================= 基本設定（数値はここで調整） =================
+const GRAV = 1500;              // 重力（px/秒²）
+const SUB = 10;                 // 物理の細かさ（1フレームを何回に分けて計算するか）
+const HK_W = 130;               // 北海道の横幅（px）※100が引っ掛けられる限界（90以下だと湾に棒が入らない）
+const FACE_K = Math.min(1, Math.max(0.72, HK_W / 160)); // 顔の大きさ
+const SHOW_K = 150 / HK_W;      // タイトル・結果で北海道を大きく見せる倍率
+const MAXV = 2000, MAXW = 16;   // 速さ・回転の上限
+const GRAB_ACC = 20000;         // つまんだ指が引っぱる力の上限
+const FLICK_MAX = 2400;         // 指の速さはここまで
+const SPIN_KEEP = 0.15;         // 投げた時に回転をどれだけ残すか
+const VX_KEEP = 1;              // 横向きの速さをどれだけ使うか（小さいほど真上に飛びやすい）
+const CAP_EXTRA = 150, CAP_K = 0.35; // 強い投げのおさえ方（棒より150上までは素直に、それ以上は35%だけ効く）
+const THROW_V = 300;            // 上向きにこれより速く離したら「1投」と数える
+const GRIP = { x: -24.2 * HK_W / 160, y: -32.6 * HK_W / 160 }; // ★つまみどころ（地面で休んでいる時の、重心の真上のふち）
+// ▼▼▼ むずかしさ（鬼畜度）を決める数字。ここを変えるだけで調整できます ▼▼▼
+const BAR_H = 230;              // 棒の高さ（なげるラインから上へ px）。高いほど むずかしい（前の版の1面は 140）
+const BAR_R = 3.7;              // 棒の太さ（半径）。噴火湾の入口は 幅7.5 しかないので 3.75 以上は入らない。細いほど やさしい（前の版は 3）
+const MU_BAR = 0;               // 棒の すべりにくさ。0＝つるつる。大きいほど やさしい（前の版は 0.6）
+const E_BAR = 0.75;             // 棒に当たった時の はね返り。大きいほど はじかれて むずかしい（前の版は 0.12）
+const BAY_IN = 3;               // 棒が 噴火湾の入口より これだけ（px）奥まで入らないと「掛かった」と数えない（前の版は 入口の外4pxでもOK）
+const SPIN_AIR = 0.05;          // 空中で 回転が おさまる速さ。小さいほど 回り続けて むずかしい（前の版は 0.25）
+const HOOK_T = 2.0;             // 噴火湾に棒が入ったまま、これだけ（秒）ぶら下がったらクリア
+const NEAR_PX = 28;             // 噴火湾が 棒に これ（px）より近づいたら「おしい!」と出す（むずかしさには関係なし）
+// ▲▲▲ ここまで ▲▲▲
+const HINTS = [ // 何回はずしたら、どのコツを出すか
+  [20, 'コツ①：つまむ場所で\nぶら下がる向きが 変わるよ'],
+  [50, 'コツ②：噴火湾の近くをつまむと\n掛かる時と 同じ向きになる'],
+  [100, 'コツ③：棒の少し右から ふわっと左上へ\n噴火湾を 横から すべり込ませよう'],
+];
+const TAUNTS = [ // 何回はずしたら、ひとこと
+  [30, '30投。まだまだ これから'], [70, '70投。北海道も 応援してる'], [150, '150投。指は あたたまってきた?'], [200, '200投。ここまで来たら 引けない'],
+  [300, '300投。北海道が 泣いてる'], [400, '400投。もはや 修行'], [500, '500投。あなたが 鬼畜です'], [700, '700投。伝説まで あと少し…?'], [1000, '1000投。……すごい'],
+];
+const W = 360;
+const FONT = "'M PLUS Rounded 1c','Hiragino Maru Gothic ProN','Hiragino Sans','Yu Gothic',sans-serif";
+const URL_PUBLIC = 'https://nkworks-games.github.io/hokkaido-hanger/';
+
+// ================= 北海道の形 =================
+// Natural Earth 1:10m（パブリックドメイン）の海岸線から作成。単位km（x:東 y:南）
+const HK_KM = [240.4,1.5,244.5,3.9,228.4,10.6,221.1,25.6,202.8,25.1,189.4,30.1,188.2,34.6,192.0,35.6,184.4,40.6,178.6,39.5,179.4,45.5,167.5,45.7,161.9,39.1,156.7,46.6,160.8,51.7,157.3,52.8,145.9,50.0,134.8,51.3,123.4,44.2,112.1,47.0,88.1,61.6,62.8,88.4,44.4,119.9,43.5,141.0,35.6,163.3,12.9,143.7,-27.6,125.3,-51.3,104.3,-59.7,103.2,-79.6,88.8,-94.1,87.1,-111.1,92.7,-138.5,111.8,-147.8,122.1,-151.3,118.9,-146.9,117.6,-151.9,114.8,-167.3,92.7,-186.3,91.0,-200.6,107.3,-203.2,126.6,-182.5,143.7,-169.1,140.5,-147.8,164.8,-137.3,169.5,-129.7,177.6,-145.2,187.3,-160.1,180.7,-169.4,183.6,-167.9,176.3,-173.5,174.6,-177.8,184.7,-190.1,190.7,-191.8,207.4,-204.7,212.8,-209.9,221.8,-223.6,217.1,-228.6,201.7,-220.1,177.4,-216.3,174.9,-215.2,157.3,-224.5,143.7,-232.7,139.9,-244.1,127.9,-245.8,120.8,-240.0,108.2,-239.4,85.8,-233.6,80.1,-223.6,79.2,-212.0,65.5,-204.1,71.3,-195.1,54.5,-184.6,44.7,-187.5,35.2,-200.3,16.6,-197.7,8.4,-191.6,8.0,-188.6,3.0,-162.4,22.6,-144.9,18.9,-144.0,24.9,-132.1,28.8,-121.3,22.4,-111.6,9.1,-110.2,-0.8,-116.6,-13.7,-114.3,-19.9,-118.6,-34.7,-113.4,-44.8,-103.2,-48.9,-93.8,-59.6,-92.7,-97.3,-85.4,-113.6,-81.6,-132.9,-84.8,-164.7,-99.4,-200.5,-91.8,-227.5,-89.8,-222.2,-79.3,-224.5,-69.3,-235.3,-21.2,-179.5,-13.6,-164.5,14.7,-131.6,44.7,-108.9,48.2,-102.3,79.1,-87.5,71.2,-86.8,75.3,-79.1,92.2,-77.2,97.2,-81.3,106.8,-81.0,111.2,-78.0,105.6,-70.1,109.7,-68.8,117.0,-79.9,119.6,-70.7,127.8,-61.7,161.1,-57.9,194.6,-89.4,206.0,-105.0,208.3,-94.1,189.9,-61.3,184.1,-41.6,196.1,-21.0,203.4,3.7,210.1,10.5,200.1,6.0,199.6,9.3,206.6,14.9,220.3,18.9,218.5,14.4,225.5,7.1,231.9,2.2];
+const BAY0 = 33, BAY1 = 45, ROOF = 42; // 内浦湾（噴火湾）：地球岬(33) → 長万部 → 恵山岬(45)。ROOF＝ぶら下がる時に棒が当たる所
+const HK = (() => {
+  const n = HK_KM.length / 2; let mn = 1e9, mx = -1e9;
+  for (let i = 0; i < n; i++) { mn = Math.min(mn, HK_KM[2 * i]); mx = Math.max(mx, HK_KM[2 * i]); }
+  const sc = HK_W / (mx - mn), X = new Float64Array(n), Y = new Float64Array(n);
+  for (let i = 0; i < n; i++) { X[i] = HK_KM[2 * i] * sc; Y[i] = HK_KM[2 * i + 1] * sc; }
+  let A = 0, cx = 0, cy = 0, Io = 0;
+  for (let i = 0; i < n; i++) { const j = (i + 1) % n, c = X[i] * Y[j] - X[j] * Y[i]; A += c; cx += (X[i] + X[j]) * c; cy += (Y[i] + Y[j]) * c; Io += c * (X[i] * X[i] + X[i] * X[j] + X[j] * X[j] + Y[i] * Y[i] + Y[i] * Y[j] + Y[j] * Y[j]); }
+  A /= 2; cx /= 6 * A; cy /= 6 * A; Io /= 12;
+  const I = Math.abs((Io - A * (cx * cx + cy * cy)) / A); // 重さ1あたりの回りにくさ
+  for (let i = 0; i < n; i++) { X[i] -= cx; Y[i] -= cy; }
+  const EX = new Float64Array(n), EY = new Float64Array(n), IL = new Float64Array(n); let maxY = -1e9, rad = 0;
+  for (let i = 0; i < n; i++) { const j = (i + 1) % n; EX[i] = X[j] - X[i]; EY[i] = Y[j] - Y[i]; IL[i] = 1 / (EX[i] * EX[i] + EY[i] * EY[i]); maxY = Math.max(maxY, Y[i]); rad = Math.max(rad, Math.hypot(X[i], Y[i])); }
+  const path = new Path2D(); for (let i = 0; i < n; i++) i ? path.lineTo(X[i], Y[i]) : path.moveTo(X[i], Y[i]); path.closePath();
+  const bay = new Path2D(); for (let i = BAY0; i <= BAY1; i++) i === BAY0 ? bay.moveTo(X[i], Y[i]) : bay.lineTo(X[i], Y[i]);
+  return { n, X, Y, EX, EY, IL, I, path, bay, maxY, rad };
+})();
+const ROOF_N = { x: -0.406, y: -0.914 }; // 屋根から湾の内側へ向かう向き
+const seatFor = r => ({ x: HK.X[ROOF] + ROOF_N.x * (r + 0.8), y: HK.Y[ROOF] + ROOF_N.y * (r + 0.8) }); // 棒が座る点
+const EQ_ANG = (() => { const s = seatFor(6); return Math.PI / 2 - Math.atan2(-s.y, -s.x); })(); // ぶら下がった時の角度
+function pip(x, y) { let c = false; for (let i = 0, j = HK.n - 1; i < HK.n; j = i++) { if ((HK.Y[i] > y) !== (HK.Y[j] > y) && x < (HK.X[j] - HK.X[i]) * (y - HK.Y[i]) / (HK.Y[j] - HK.Y[i]) + HK.X[i]) c = !c; } return c; }
+
+// ================= ステージ（凍った鉄棒 1本だけ。x＝横の位置、h＝なげるラインからの高さ、r＝棒の太さ） =================
+const STAGE = { name: '凍った鉄棒', x: 0.45, h: BAR_H, r: BAR_R, mat: 'ice' };
+
+// ================= 画面サイズ =================
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let H = 700, S = 1, DPR = 1, OX = 0, OY = 0;
+const L = {};
+function layout() {
+  L.GY = H - 30;            // 地面
+  L.throwY = H - 225;       // なげるライン（ここより上に指が出たら投げる）
+  L.reset = { x: W - 24, y: 82 };
+  L.mute = { x: W - 64, y: 82 };
+}
+function resize() {
+  const sa = document.getElementById('sa'), cs = getComputedStyle(sa);
+  const st = parseFloat(cs.paddingTop) || 0, sb = parseFloat(cs.paddingBottom) || 0;
+  const vw = window.innerWidth, vh = window.innerHeight - st - sb;
+  S = Math.min(vw / W, vh / 600); H = Math.min(vh / S, 820);
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  const cw = W * S, ch = H * S; OX = (vw - cw) / 2; OY = st + (vh - ch) / 2;
+  Object.assign(cv.style, { width: cw + 'px', height: ch + 'px', left: OX + 'px', top: OY + 'px' });
+  cv.width = Math.round(cw * DPR); cv.height = Math.round(ch * DPR);
+  layout();
+  if (G.state === 'play') { placeBar(); if (B.y > L.GY) resetBody(); } // 画面の大きさが変わった時
+}
+window.addEventListener('resize', resize);
+
+// ================= 保存（音のオンオフ・自己ベスト） =================
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { } }
+};
+
+// ================= サウンド =================
+let AC = null, NOISE = null, OUT = null, muted = store.get('hh_mute', false);
+function audioInit() {
+  try {
+    if (!AC) {
+      AC = new (window.AudioContext || window.webkitAudioContext)();
+      const b = AC.createBuffer(1, AC.sampleRate * 1.2, AC.sampleRate), d = b.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+      NOISE = b; OUT = AC.createGain(); OUT.gain.value = 0.9; OUT.connect(AC.destination);
+      const s = AC.createBufferSource(); s.buffer = AC.createBuffer(1, 1, 22050); s.connect(AC.destination); s.start(0);
+    }
+    if (AC.state === 'suspended') AC.resume();
+  } catch (e) { }
+}
+function tone(f1, f2, dur, type = 'sine', vol = 0.15, delay = 0) {
+  if (!AC || muted) return;
+  const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(f1, t); if (f2 !== f1) o.frequency.exponentialRampToValueAtTime(Math.max(1, f2), t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.linearRampToValueAtTime(vol, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  o.connect(g); g.connect(OUT); o.start(t); o.stop(t + dur + 0.03);
+}
+function noise(dur, vol, type = 'lowpass', freq = 1200, delay = 0) {
+  if (!AC || muted || !NOISE) return;
+  const t = AC.currentTime + delay, s = AC.createBufferSource(), f = AC.createBiquadFilter(), g = AC.createGain();
+  s.buffer = NOISE; f.type = type; f.frequency.value = freq;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+  s.connect(f); f.connect(g); g.connect(OUT); s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
+}
+const C5 = 523.25, semi = n => C5 * Math.pow(2, n / 12);
+const SFX = {
+  grab() { tone(420, 760, 0.09, 'sine', 0.18); },
+  throw(v) { const k = Math.min(1, v / 1600); noise(0.25 + k * 0.15, 0.08 + k * 0.12, 'bandpass', 700 + k * 900); tone(300, 900 + k * 600, 0.18, 'sine', 0.05); },
+  hitBar(v) { const k = Math.min(1, v / 900); tone(1500, 1250, 0.18, 'triangle', 0.07 + k * 0.08); tone(2300, 2100, 0.12, 'sine', 0.04); noise(0.04, 0.08, 'highpass', 4000); }, // 凍った鉄棒：カーン
+  thud(v) { const k = Math.min(1, v / 900); tone(130, 60, 0.18, 'sine', 0.18 + k * 0.2); noise(0.12, 0.08 + k * 0.12, 'lowpass', 500); },
+  snap() { noise(0.05, 0.3, 'highpass', 3500); tone(1900, 1900, 0.05, 'square', 0.06); [0, 4, 7, 12].forEach((n, i) => tone(semi(n + 7), semi(n + 7), 0.16, 'triangle', 0.1, 0.06 + i * 0.07)); },
+  clear(hio) { const seq = hio ? [0, 4, 7, 12, 16, 19, 24, 28] : [0, 4, 7, 12]; seq.forEach((n, i) => tone(semi(n), semi(n), 0.22, 'square', 0.05, i * 0.08)); tone(semi(seq[seq.length - 1]), semi(seq[seq.length - 1]), 0.6, 'triangle', 0.08, seq.length * 0.08); },
+  oshii() { tone(660, 520, 0.12, 'triangle', 0.08); tone(520, 392, 0.2, 'triangle', 0.08, 0.12); },
+  pop() { tone(880, 1320, 0.08, 'sine', 0.1); },
+  slip() { tone(1100, 320, 0.28, 'sine', 0.1); noise(0.12, 0.05, 'highpass', 5000); },
+  tick(k) { tone(k ? 1320 : 990, k ? 1320 : 990, 0.06, 'triangle', 0.08); },
+  click() { tone(900, 900, 0.04, 'square', 0.04); },
+  roll() { tone(1200, 1200, 0.03, 'square', 0.03); },
+  fanfare() { [0, 4, 7, 12, 7, 12, 16, 19, 24].forEach((n, i) => tone(semi(n), semi(n), 0.2, 'square', 0.05, i * 0.1)); noise(0.6, 0.2, 'lowpass', 180, 0.9); },
+};
+function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { } }
+
+// ================= ゲームの状態 =================
+const G = { state: 'title', t: 0, st: 0, fx: [], shake: 0, flash: 0, throws: 0, time: 0 };
+const B = { x: 180, y: 400, a: 0, vx: 0, vy: 0, w: 0 }; // 北海道（剛体）
+const BAR = { x: 180, y: 200, r: BAR_R, vx: 0, vy: 0, bx: 180, by: 200 };
+const since = () => G.t - G.ts;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const fmtTime = s => { s = Math.floor(s); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+function setState(s) { G.state = s; G.ts = G.t; }
+function stg() { return STAGE; }
+
+function startGame() { clearRun(); G.throws = 0; G.time = 0; startPlay(); }
+// 続きから遊べるように、投げた回数と時間を保存する（ページを閉じても、掛かるまで数え続ける）
+function saveRun() { store.set('hh2_run', { throws: G.throws, time: Math.round(G.time) }); }
+function loadRun() { const r = store.get('hh2_run', null); return r && r.throws > 0 ? r : null; }
+function clearRun() { try { localStorage.removeItem('hh2_run'); } catch (e) { } }
+function continueGame(r) { G.throws = r.throws; G.time = r.time || 0; startPlay(); say(`つづきから　ここまで ${G.throws}投`, 1.8); }
+function startPlay() {
+  setState('play');
+  Object.assign(G, { st: 0, miss: G.throws, hold: false, flying: false, entered: false, near: 1e9, inBay: false, hookT: 0, hooked: false, hookedT: 0, clrS: false, ground: false, hitBar: 0, impact: 0, stuckT: 0, said: '', saidT: -9, fx: [], face: 'normal', faceT: 0 });
+  BAR.r = STAGE.r; placeBar();
+  G.seat = seatFor(STAGE.r);
+  resetBody();
+  if (G.throws === 0) say('噴火湾を 凍った鉄棒に 引っ掛けろ!\n上がる時は 棒をすり抜けるよ', 4);
+}
+function startStage() { G.throws = 0; G.time = 0; startPlay(); } // テスト用（保存には触らない）
+function placeBar() { BAR.bx = STAGE.x * W; BAR.by = L.throwY - Math.min(STAGE.h, L.throwY - 140); BAR.x = BAR.bx; BAR.y = BAR.by; }
+function resetBody() {
+  Object.assign(B, { a: 0, vx: 0, vy: 0, w: 0 }); B.x = W / 2; B.y = L.GY - HK.maxY - 2;
+  G.hold = false; G.flying = false; G.ghost = false; G.inBay = false; G.hookT = 0; G.stuckT = 0; G.upT = 0;
+}
+function updateBar() { BAR.x = BAR.bx; BAR.y = BAR.by; } // 棒は動かない（止まっている棒に掛けるだけ。なのに…）
+function say(s, dur = 1.4) { G.said = s; G.saidT = G.t; G.saidDur = dur; }
+function setFace(f, dur = 0.8) { G.face = f; G.faceT = G.t + dur; }
+
+// ================= 物理 =================
+function physStep(h) {
+  G.st += h; updateBar();
+  B.vy += GRAV * h;
+  B.w *= 1 - (G.hold ? 1.4 : G.hooked ? 4 : SPIN_AIR) * h; // 掛かった後は 揺れをすぐ止める
+  if (G.hold) grabSolve(h);
+  const sp = Math.hypot(B.vx, B.vy); if (sp > MAXV) { B.vx *= MAXV / sp; B.vy *= MAXV / sp; }
+  B.w = clamp(B.w, -MAXW, MAXW);
+  B.x += B.vx * h; B.y += B.vy * h; B.a += B.w * h;
+  if (G.ghost && B.vy >= 0 && !barOverlap()) G.ghost = false; // 投げて上がっている間は棒をすり抜ける。落ち始めて棒から離れたら当たるようになる
+  if (!G.ghost) collideBar();
+  collideBounds();
+}
+function barOverlap() { // 棒が北海道に重なっているか
+  const c = Math.cos(B.a), s = Math.sin(B.a), dx = BAR.x - B.x, dy = BAR.y - B.y;
+  if (dx * dx + dy * dy > (HK.rad + BAR.r + 2) ** 2) return false;
+  const lx = c * dx + s * dy, ly = -s * dx + c * dy;
+  if (pip(lx, ly)) return true;
+  for (let i = 0; i < HK.n; i++) { let t = ((lx - HK.X[i]) * HK.EX[i] + (ly - HK.Y[i]) * HK.EY[i]) * HK.IL[i]; t = t < 0 ? 0 : t > 1 ? 1 : t; const qx = HK.X[i] + HK.EX[i] * t - lx, qy = HK.Y[i] + HK.EY[i] * t - ly; if (qx * qx + qy * qy < (BAR.r + 1) ** 2) return true; }
+  return false;
+}
+function pointSolve(lx, ly, tx, ty, tvx, tvy, beta, soft, jcap, h) { // 北海道の点(lx,ly)を目標へ引く
+  const c = Math.cos(B.a), s = Math.sin(B.a), rx = c * lx - s * ly, ry = s * lx + c * ly;
+  const vpx = B.vx - B.w * ry, vpy = B.vy + B.w * rx;
+  const dvx = tvx + (tx - B.x - rx) * beta / h - vpx, dvy = tvy + (ty - B.y - ry) * beta / h - vpy;
+  const iI = 1 / HK.I, k11 = 1 + iI * ry * ry, k12 = -iI * rx * ry, k22 = 1 + iI * rx * rx, det = k11 * k22 - k12 * k12;
+  let jx = (k22 * dvx - k12 * dvy) / det * soft, jy = (-k12 * dvx + k11 * dvy) / det * soft;
+  const jm = Math.hypot(jx, jy), jmax = jcap * h; if (jm > jmax) { jx *= jmax / jm; jy *= jmax / jm; }
+  B.vx += jx; B.vy += jy; B.w += (rx * jy - ry * jx) * iI;
+}
+function grabSolve(h) { pointSolve(G.anc.x, G.anc.y, G.fx2, G.fy2, G.fvx, G.fvy, 0.2, 0.7, GRAB_ACC, h); }
+function collideBar() {
+  const c = Math.cos(B.a), s = Math.sin(B.a), dx = BAR.x - B.x, dy = BAR.y - B.y;
+  if (dx * dx + dy * dy > (HK.rad + BAR.r + 2) ** 2) return;
+  const lx = c * dx + s * dy, ly = -s * dx + c * dy;
+  let best = 1e18, bi = -1, bpx = 0, bpy = 0;
+  for (let i = 0; i < HK.n; i++) { let t = ((lx - HK.X[i]) * HK.EX[i] + (ly - HK.Y[i]) * HK.EY[i]) * HK.IL[i]; t = t < 0 ? 0 : t > 1 ? 1 : t; const qx = HK.X[i] + HK.EX[i] * t, qy = HK.Y[i] + HK.EY[i] * t, d2 = (lx - qx) * (lx - qx) + (ly - qy) * (ly - qy); if (d2 < best) { best = d2; bi = i; bpx = qx; bpy = qy; } }
+  const d = Math.sqrt(best), inside = pip(lx, ly);
+  if (!inside && d >= BAR.r) return;
+  let nlx, nly;
+  if (d < 1e-6) { nlx = -HK.EY[bi]; nly = HK.EX[bi]; const l = Math.hypot(nlx, nly); nlx /= l; nly /= l; }
+  else if (inside) { nlx = (lx - bpx) / d; nly = (ly - bpy) / d; } else { nlx = (bpx - lx) / d; nly = (bpy - ly) / d; }
+  const pen = inside ? d + BAR.r : BAR.r - d, nx = c * nlx - s * nly, ny = s * nlx + c * nly;
+  const cpx = B.x + c * bpx - s * bpy, cpy = B.y + s * bpx + c * bpy;
+  B.x += nx * pen * 0.8; B.y += ny * pen * 0.8;
+  const rx = cpx - B.x, ry = cpy - B.y;
+  let vrx = B.vx - B.w * ry - BAR.vx, vry = B.vy + B.w * rx - BAR.vy; const vn = vrx * nx + vry * ny;
+  if (vn < 0) {
+    const rn = rx * ny - ry * nx, jn = -(1 + (vn < -60 && !G.hooked ? E_BAR : 0)) * vn / (1 + rn * rn / HK.I);
+    B.vx += jn * nx; B.vy += jn * ny; B.w += rn * jn / HK.I;
+    vrx = B.vx - B.w * ry - BAR.vx; vry = B.vy + B.w * rx - BAR.vy;
+    const tx = -ny, ty = nx, vt = vrx * tx + vry * ty, rt = rx * ty - ry * tx;
+    let jt = -vt / (1 + rt * rt / HK.I); const lim = (G.hooked ? 0.9 : MU_BAR) * jn; jt = jt < -lim ? -lim : jt > lim ? lim : jt; // 凍った棒は つるつる（掛かった後だけ すべらない）
+    B.vx += jt * tx; B.vy += jt * ty; B.w += rt * jt / HK.I;
+    if (vn < -120) G.hitBar = Math.max(G.hitBar, -vn);
+  }
+}
+function contact(px, py, nx, ny, e, mu) { // 地面・壁との当たり（点で受ける）
+  const rx = px - B.x, ry = py - B.y;
+  let vrx = B.vx - B.w * ry, vry = B.vy + B.w * rx; const vn = vrx * nx + vry * ny;
+  if (vn >= 0) return;
+  const rn = rx * ny - ry * nx, jn = -(1 + (vn < -80 ? e : 0)) * vn / (1 + rn * rn / HK.I);
+  B.vx += jn * nx; B.vy += jn * ny; B.w += rn * jn / HK.I;
+  vrx = B.vx - B.w * ry; vry = B.vy + B.w * rx;
+  const tx = -ny, ty = nx, vt = vrx * tx + vry * ty, rt = rx * ty - ry * tx;
+  let jt = -vt / (1 + rt * rt / HK.I); const lim = mu * jn; jt = jt < -lim ? -lim : jt > lim ? lim : jt;
+  B.vx += jt * tx; B.vy += jt * ty; B.w += rt * jt / HK.I;
+  if (vn < -150) G.impact = Math.max(G.impact, -vn);
+}
+function collideBounds() {
+  const c = Math.cos(B.a), s = Math.sin(B.a); let pg = 0, pl = 0, pr = 0;
+  for (let i = 0; i < HK.n; i++) {
+    const px = B.x + c * HK.X[i] - s * HK.Y[i], py = B.y + s * HK.X[i] + c * HK.Y[i];
+    if (py > L.GY) { pg = Math.max(pg, py - L.GY); contact(px, py, 0, -1, 0.25, 0.6); }
+    if (px < 0) { pl = Math.max(pl, -px); contact(px, py, 1, 0, 0.3, 0.3); }
+    else if (px > W) { pr = Math.max(pr, px - W); contact(px, py, -1, 0, 0.3, 0.3); }
+  }
+  if (pg) { G.ground = true; B.y -= pg * 0.8; if (Math.hypot(B.vx, B.vy) < 25 && Math.abs(B.w) < 0.4) { B.vx *= 0.96; B.w *= 0.96; } }
+  if (pl) B.x += pl * 0.8; if (pr) B.x -= pr * 0.8;
+}
+const BAYP = (() => { // 噴火湾の形（湾口の線を BAY_IN だけ内へ寄せる＝入口のふちに乗っただけでは掛かったことにしない）
+  const ax = HK.X[BAY0], ay = HK.Y[BAY0], bx = HK.X[BAY1], by = HK.Y[BAY1], mx = HK.X[(BAY0 + BAY1) >> 1], my = HK.Y[(BAY0 + BAY1) >> 1];
+  let nx = by - ay, ny = ax - bx; const l = Math.hypot(nx, ny); nx /= l; ny /= l;
+  if ((mx - ax) * nx + (my - ay) * ny > 0) { nx = -nx; ny = -ny; } // 湾の外向きにそろえる
+  const P = []; for (let i = BAY0; i <= BAY1; i++) P.push([HK.X[i], HK.Y[i]]);
+  P.push([bx - nx * BAY_IN, by - ny * BAY_IN], [ax - nx * BAY_IN, ay - ny * BAY_IN]);
+  return P;
+})();
+function inBay() { // 棒が噴火湾の中にあるか
+  const c = Math.cos(B.a), s = Math.sin(B.a), dx = BAR.x - B.x, dy = BAR.y - B.y, x = c * dx + s * dy, y = -s * dx + c * dy;
+  let k = false;
+  for (let i = 0, j = BAYP.length - 1; i < BAYP.length; j = i++) { const [xi, yi] = BAYP[i], [xj, yj] = BAYP[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) k = !k; }
+  return k;
+}
+function hookNow() { // カチッ！ 本当に引っ掛かった
+  G.hooked = true; G.hookedT = G.t; G.flying = false; saveRun();
+  SFX.snap(); buzz(35); G.shake = 0.35; G.flash = 0.35;
+  G.fx.push({ k: 'pop', s: 'カチッ!', x: BAR.x + 26, y: BAR.y - 22, t: 0, life: 0.9, col: '#ff7a00', size: 28 });
+  for (let i = 0; i < 46; i++) { const a = Math.random() * Math.PI * 2, sp = 120 + Math.random() * 300; G.fx.push({ k: 'conf', x: BAR.x, y: BAR.y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 150, c: ['#ff5d73', '#ffd23a', '#41c7ff', '#7cff6b', '#c78bff'][i % 5], t: 0, life: 1.2 + Math.random() * 0.6, rot: Math.random() * 6 }); }
+  setFace('happy', 9);
+}
+
+// ================= 1フレームの更新 =================
+function update(dt) {
+  G.t += dt;
+  G.shake = Math.max(0, G.shake - dt * 1.8); G.flash = Math.max(0, G.flash - dt * 2.5);
+  for (const f of G.fx) f.t += dt;
+  G.fx = G.fx.filter(f => f.t < f.life);
+  if (G.state === 'play') updatePlay(dt);
+  if (G.state === 'result') { const t = since(), k = Math.floor(Math.min(1, t / 1.2) * 20); if (k > (G.rolled || 0)) { G.rolled = k; SFX.roll(); } if (t > 1.3 && !G.fanf) { G.fanf = true; SFX.fanfare(); } }
+}
+function seatWorld() { const c = Math.cos(B.a), s = Math.sin(B.a); return [B.x + c * G.seat.x - s * G.seat.y, B.y + s * G.seat.x + c * G.seat.y]; } // 噴火湾の「棒が座る所」の今の位置
+function updatePlay(dt) {
+  if (!G.hooked) G.time += dt;
+  if (G.hold && performance.now() - G.lastMove > 60) { G.fvx *= 0.8; G.fvy *= 0.8; }
+  G.hitBar = 0; G.impact = 0; G.ground = false;
+  const h = dt / SUB; for (let i = 0; i < SUB; i++) physStep(h);
+  if (G.hitBar > 0) { SFX.hitBar(G.hitBar, STAGE.mat); G.fx.push({ k: 'star', x: BAR.x, y: BAR.y, t: 0, life: 0.35 }); if (G.hitBar > 300) { G.fx.push({ k: 'pop', s: 'カン!', x: BAR.x + 22, y: BAR.y - 18, t: 0, life: 0.5, col: '#4a7fae', size: 16 }); setFace('ouch', 0.5); } }
+  if (G.impact > 0) { SFX.thud(G.impact); if (G.impact > 500) { G.shake = Math.max(G.shake, 0.15); setFace('dizzy', 0.7); } }
+  if (G.hold && G.fy2 < G.relY) { G.relT += dt; if (G.relT > 0.03) release(); } else G.relT = 0; // なげるラインを越えたら（指の速さが測れるまで少し待って）手を離す
+  if (G.hooked) { // 掛かった！ 少し喜んでから結果へ
+    if (!G.clrS && G.t - G.hookedT > 0.6) { G.clrS = true; SFX.clear(G.throws === 1); }
+    if (G.t - G.hookedT > 2.4) finishGame();
+    return;
+  }
+  // 本当に掛かっているか：棒が噴火湾の奥にあって、手も地面もふれていない
+  G.inBay = !G.hold && !G.ghost && !G.ground && inBay();
+  if (G.inBay) {
+    if (G.flying) G.entered = true;
+    const before = G.hookT; G.hookT += dt;
+    if (before < HOOK_T / 3 && G.hookT >= HOOK_T / 3) SFX.tick(0); if (before < HOOK_T * 2 / 3 && G.hookT >= HOOK_T * 2 / 3) SFX.tick(1);
+    if (G.hookT >= HOOK_T) { hookNow(); return; }
+  } else {
+    if (G.hookT > 0.1 && !G.hold) { G.fx.push({ k: 'pop', s: 'ツルッ', x: BAR.x + 30, y: BAR.y - 20, t: 0, life: 0.8, col: '#2f8fd6', size: 24 }); SFX.slip(); setFace('surprise', 0.7); } // 入ったのに すべって抜けた
+    G.hookT = 0;
+  }
+  if (G.flying && !G.ghost) { const [sx, sy] = seatWorld(); G.near = Math.min(G.near, Math.hypot(BAR.x - sx, BAR.y - sy)); } // どこまで近づいたか
+  // 投げた後：なげるエリアに戻ってきたら「はずれ」
+  if (G.flying && B.vy > 0 && B.y > L.throwY - 20) onMiss();
+  if (!G.flying) G.entered = false;
+  // 引っ掛からずに上に残った（別の所で止まった・ぶら下がった）→ やり直し
+  const still = Math.hypot(B.vx, B.vy) < 30 && Math.abs(B.w) < 0.4, up = !G.hold && !G.inBay && B.y < L.throwY - 30;
+  G.stuckT = up && still ? G.stuckT + dt : 0; G.upT = up ? (G.upT || 0) + dt : 0;
+  if (G.stuckT > 1.4 || G.upT > 3.2) { const f = G.flying; resetBody(); say('そこじゃないよ! 噴火湾で掛けてね', 2); if (f) onMiss(true); }
+}
+function onMiss(quiet) { // はずれ：おしい表示・コツ・ひとこと
+  G.flying = false; G.miss++;
+  if (!quiet && (G.entered || G.near < NEAR_PX)) { G.fx.push({ k: 'pop', s: G.entered ? 'おしい!!' : 'おしい!', x: W / 2, y: L.throwY - 40, t: 0, life: 1.0, col: '#ff5d73', size: G.entered ? 30 : 22 }); SFX.oshii(); }
+  G.entered = false; G.near = 1e9;
+  const hn = HINTS.find(v => v[0] === G.miss), tn = TAUNTS.find(v => v[0] === G.miss);
+  if (hn) say(hn[1], 6);
+  else if (tn) say(tn[1], 3);
+  else if (G.miss > HINTS[HINTS.length - 1][0] && G.miss % 40 === 0) say(HINTS[(G.miss / 40) % HINTS.length][1], 6);
+}
+function finishGame() {
+  clearRun();
+  const n = G.throws, best = store.get('hh2_best', null), nb = best === null || n < best;
+  if (nb) store.set('hh2_best', n);
+  G.res = { n, time: G.time, best: nb ? n : best, newBest: nb && best !== null, first: best === null };
+  setState('result'); G.rolled = 0; G.fanf = false;
+}
+function rankOf(n) { // 何投目で掛かったか → 称号
+  return n === 1 ? ['奇跡のホールインワン', 'うそでしょ… 1投目で!?'] : n <= 10 ? ['神の手', '北海道が 手に吸いつく'] : n <= 30 ? ['伝説のハンガー職人', 'コツを 完全に つかんでいる'] : n <= 100 ? ['北海道ハンガー名人', 'ねばり勝ち!'] : n <= 300 ? ['執念の人', 'あきらめない心に 北海道も感動'] : ['不屈の鬼', 'ここまで投げた あなたが 鬼畜'];
+}
+
+// ================= 入力 =================
+function grabAt(x, y) {
+  if (G.state !== 'play' || G.hooked || B.y < L.throwY - 10) return false;
+  const c = Math.cos(B.a), s = Math.sin(B.a), dx = x - B.x, dy = y - B.y, lx = c * dx + s * dy, ly = -s * dx + c * dy;
+  let ax = lx, ay = ly;
+  if (!pip(lx, ly)) { // 少し外をさわっても つかめるように
+    let best = 1e18; for (let i = 0; i < HK.n; i++) { let t = ((lx - HK.X[i]) * HK.EX[i] + (ly - HK.Y[i]) * HK.EY[i]) * HK.IL[i]; t = clamp(t, 0, 1); const qx = HK.X[i] + HK.EX[i] * t, qy = HK.Y[i] + HK.EY[i] * t, d2 = (lx - qx) ** 2 + (ly - qy) ** 2; if (d2 < best) { best = d2; ax = qx; ay = qy; } }
+    if (best > 22 * 22) return false;
+  }
+  G.hold = true; G.anc = { x: ax, y: ay }; G.fx2 = x; G.fy2 = y; G.fvx = 0; G.fvy = 0; G.lastMove = performance.now(); G.lastPt = { x, y, t: performance.now() };
+  G.relY = Math.min(L.throwY, y - 26); G.relT = 0; G.flying = false;
+  SFX.grab(); setFace('surprise', 0.4);
+  return true;
+}
+function moveFinger(x, y) {
+  const now = performance.now(), gap = now - G.lastPt.t, dt = clamp(gap, 4, 34) / 1000;
+  const ivx = (x - G.lastPt.x) / dt, ivy = (y - G.lastPt.y) / dt, k = gap > 60 ? 1 : 0.65; // 止まっていた後は新しい速さだけ使う
+  G.fvx = G.fvx * (1 - k) + ivx * k; G.fvy = G.fvy * (1 - k) + ivy * k;
+  G.fx2 = x; G.fy2 = y; G.lastPt = { x, y, t: now }; G.lastMove = now;
+}
+function release() {
+  if (!G.hold) return;
+  G.hold = false;
+  // 指の速さで北海道ごと飛ばす（回転は少しだけ残す）
+  let fvx = G.fvx, fvy = G.fvy; const fs = Math.hypot(fvx, fvy); if (fs > FLICK_MAX) { fvx *= FLICK_MAX / fs; fvy *= FLICK_MAX / fs; }
+  if (-fvy > THROW_V) { B.vx = fvx * VX_KEEP; B.vy = fvy; B.w *= SPIN_KEEP; }
+  // 強すぎる投げは少しおさえる（画面の外へ飛んでいきすぎないように）
+  const vref = Math.sqrt(2 * GRAV * (L.throwY - BAR.by + CAP_EXTRA)), sp = Math.hypot(B.vx, B.vy);
+  if (sp > vref) { const k = (vref + (sp - vref) * CAP_K) / sp; B.vx *= k; B.vy *= k; }
+  const up = -B.vy;
+  if (up > THROW_V) { G.throws++; G.flying = true; G.ghost = true; G.entered = false; G.near = 1e9; saveRun(); SFX.throw(Math.hypot(B.vx, B.vy)); setFace('fly', 1.2); }
+}
+const inBox = (b, x, y) => x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
+const near = (p, x, y, r = 20) => Math.hypot(x - p.x, y - p.y) < r;
+function resultBtns() { const y = H - 92; return { retry: { x: 20, y, w: 152, h: 50 }, share: { x: W - 172, y, w: 152, h: 50 }, menu: { x: W / 2 - 60, y: H - 34, w: 120, h: 28 } }; }
+function titleBtns() { // 続きがあれば「つづきから」「はじめから」（＋まだ掛からない…のシェア）
+  const run = loadRun(), y = H * (run ? 0.76 : 0.8);
+  return run ? { run, cont: { x: W / 2 - 115, y: y - 50, w: 230, h: 60 }, fresh: { x: W / 2 - 80, y: y + 20, w: 160, h: 40 }, giveup: run.throws >= 10 ? { x: W / 2 - 118, y: y + 70, w: 236, h: 30 } : null } : { start: { x: W / 2 - 100, y: y - 30, w: 200, h: 60 } };
+}
+function share(giveup) {
+  const url = /^https?:/.test(location.protocol) && location.hostname.endsWith('github.io') ? location.origin + location.pathname : URL_PUBLIC;
+  const msg = giveup ? `ホッカイドウハンガー\n凍った鉄棒に 北海道が 掛からない…（${giveup.throws}投・${fmtTime(giveup.time || 0)}）\n#ホッカイドウハンガー`
+    : `ホッカイドウハンガー\n凍った鉄棒に 北海道を ${G.res.n}投目で 引っ掛けた！（タイム ${fmtTime(G.res.time)}）\n称号：${rankOf(G.res.n)[0]}\n#ホッカイドウハンガー`;
+  const u = 'https://twitter.com/intent/tweet?text=' + encodeURIComponent(msg) + '&url=' + encodeURIComponent(url);
+  const w = window.open(u, '_blank'); if (!w) location.href = u;
+}
+function onDown(x, y) {
+  audioInit();
+  if (G.state === 'title') {
+    if (near({ x: W - 24, y: 26 }, x, y, 22)) { muted = !muted; store.set('hh_mute', muted); return; }
+    const tb = titleBtns();
+    if (!tb.run) { SFX.click(); startGame(); return; }
+    if (inBox(tb.cont, x, y)) { SFX.click(); continueGame(tb.run); return; }
+    if (inBox(tb.fresh, x, y)) { // まちがって記録を消さないように、2回タップで
+      if (G.t - (G.freshT || -9) < 2.5) { SFX.click(); G.freshT = -9; startGame(); } else { G.freshT = G.t; SFX.click(); }
+    }
+    else if (tb.giveup && inBox(tb.giveup, x, y)) share(tb.run);
+    return;
+  }
+  if (G.state === 'result') {
+    if (since() < 0.8) return;
+    const b = resultBtns();
+    if (inBox(b.share, x, y)) share(null); else if (inBox(b.retry, x, y)) { SFX.click(); startGame(); } else if (inBox(b.menu, x, y)) { SFX.click(); setState('title'); }
+    return;
+  }
+  if (near(L.mute, x, y)) { muted = !muted; store.set('hh_mute', muted); return; }
+  if (near(L.reset, x, y)) { SFX.click(); resetBody(); return; }
+  grabAt(x, y);
+}
+const toLocal = e => [(e.clientX - OX) / S, (e.clientY - OY) / S];
+let pid = null;
+cv.addEventListener('pointerdown', e => { e.preventDefault(); if (pid !== null && G.hold) return; pid = e.pointerId; const [x, y] = toLocal(e); onDown(x, y); });
+cv.addEventListener('pointermove', e => { if (e.pointerId !== pid || !G.hold) return; const [x, y] = toLocal(e); moveFinger(x, y); });
+const up = e => { if (e.pointerId !== pid) return; pid = null; release(); };
+cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+document.addEventListener('touchend', audioInit, { passive: true });
+document.addEventListener('contextmenu', e => e.preventDefault());
+document.addEventListener('gesturestart', e => e.preventDefault());
+
+// ================= 描画の道具 =================
+function rrect(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function text(s, x, y, size, col, o = {}) {
+  ctx.save(); ctx.translate(x, y); if (o.rot) ctx.rotate(o.rot); if (o.sc) ctx.scale(o.sc, o.sc);
+  ctx.font = `${o.w || 800} ${size}px ${FONT}`; ctx.textAlign = o.align || 'center'; ctx.textBaseline = 'middle'; ctx.globalAlpha = o.a === undefined ? 1 : Math.max(0, o.a);
+  if (o.stroke) { ctx.lineJoin = 'round'; ctx.strokeStyle = o.stroke; ctx.lineWidth = o.sw || size * 0.22; ctx.strokeText(s, 0, 0); }
+  ctx.fillStyle = col; ctx.fillText(s, 0, 0); ctx.restore();
+}
+function star(x, y, r, col) { // 5つの角の星
+  ctx.save(); ctx.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, rr = i % 2 ? r * 0.45 : r; ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr); } ctx.closePath();
+  ctx.fillStyle = col; ctx.strokeStyle = '#7a5200'; ctx.lineWidth = 1.2; ctx.fill(); ctx.stroke(); ctx.restore();
+}
+function knob(x, y, r, mat) { // 棒の先（こちら向きに突き出た断面）
+  const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, r * 0.1, x, y, r);
+  const cols = { metal: ['#ffffff', '#8b98a6'], ice: ['#ffffff', '#7cc4f2'] }[mat] || ['#fff', '#999'];
+  g.addColorStop(0, cols[0]); g.addColorStop(1, cols[1]);
+  ctx.fillStyle = g; ctx.strokeStyle = 'rgba(40,40,60,0.75)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+}
+function cloud(x, y, s, a = 0.9) { ctx.save(); ctx.globalAlpha = a; ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 16 * s, 0, Math.PI * 2); ctx.arc(x + 18 * s, y - 8 * s, 20 * s, 0, Math.PI * 2); ctx.arc(x + 40 * s, y, 15 * s, 0, Math.PI * 2); ctx.rect(x, y, 40 * s, 15 * s); ctx.fill(); ctx.restore(); }
+
+// ================= 背景（冬の北海道） =================
+function drawSky() {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#93cbf3'); g.addColorStop(0.72, '#e6f4ff'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.fillStyle = '#fffbea'; ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 34; ctx.beginPath(); ctx.arc(60, 132, 20, 0, Math.PI * 2); ctx.fill(); ctx.restore(); // 冬の太陽
+  for (let i = 0; i < 4; i++) { const x = ((i * 113 + G.t * (6 + i * 3)) % (W + 140)) - 70, y = 70 + i * 52 + (i % 2) * 20; cloud(x, y, 0.7 + (i % 3) * 0.25, 0.8); }
+  // 遠くの雪山
+  const my = L.throwY + 14;
+  for (const [mx, mh, mw] of [[70, 74, 96], [205, 104, 128], [318, 62, 92]]) {
+    ctx.fillStyle = '#b9d6ee'; ctx.beginPath(); ctx.moveTo(mx - mw, my); ctx.lineTo(mx, my - mh); ctx.lineTo(mx + mw, my); ctx.fill();
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.moveTo(mx - mw * 0.3, my - mh * 0.7); ctx.lineTo(mx, my - mh); ctx.lineTo(mx + mw * 0.3, my - mh * 0.7); ctx.lineTo(mx + mw * 0.14, my - mh * 0.6); ctx.lineTo(mx, my - mh * 0.7); ctx.lineTo(mx - mw * 0.15, my - mh * 0.58); ctx.fill();
+  }
+  // 雪
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  for (let i = 0; i < 44; i++) { const x = (((i * 97.3 + Math.sin(G.t * 0.7 + i * 1.7) * 12 + G.t * (4 + (i % 5) * 2)) % W) + W) % W, y = (i * 53.7 + G.t * (20 + (i % 7) * 6)) % (L.throwY + 30); ctx.beginPath(); ctx.arc(x, y, 1.1 + (i % 3) * 0.7, 0, Math.PI * 2); ctx.fill(); }
+  // 雪原
+  const sg = ctx.createLinearGradient(0, L.throwY, 0, L.GY); sg.addColorStop(0, '#dcebf7'); sg.addColorStop(1, '#f2f8fd'); ctx.fillStyle = sg;
+  ctx.beginPath(); ctx.moveTo(0, L.throwY + 30); for (let x = 0; x <= W; x += 20) ctx.lineTo(x, L.throwY + 10 + Math.sin(x * 0.02) * 12); ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.fill();
+  // 地面（踏み固めた雪）
+  ctx.fillStyle = '#c9dff0'; ctx.fillRect(0, L.GY, W, H - L.GY);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(0, L.GY, W, 6);
+}
+function drawZone() { // なげるエリア
+  ctx.save(); ctx.fillStyle = 'rgba(80,150,215,0.10)'; ctx.fillRect(0, L.throwY, W, L.GY - L.throwY);
+  ctx.setLineDash([8, 6]); ctx.strokeStyle = 'rgba(70,140,205,0.85)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, L.throwY); ctx.lineTo(W, L.throwY); ctx.stroke(); ctx.restore();
+  text('▲ ここから上へ なげる', 10, L.throwY + 12, 11, '#3f86c4', { align: 'left', w: 800, stroke: 'rgba(255,255,255,0.9)', sw: 3 });
+}
+
+// ================= 凍った鉄棒の絵（当たり判定は 棒の先の丸だけ） =================
+const DECO = {
+  tetsubo(x, y) { // ななめ前から見た鉄棒。手前の棒のはし（丸）に掛ける
+    const bx = x + 28, by = y - 16, gy = L.throwY + 20;
+    ctx.fillStyle = '#5f8db6'; ctx.fillRect(bx - 2.5, by, 5, gy - 12 - by); // 奥の柱
+    ctx.lineCap = 'round'; ctx.strokeStyle = '#3f79ad'; ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(bx, by); ctx.stroke(); ctx.strokeStyle = '#8fd2fa'; ctx.lineWidth = 6.5; ctx.stroke(); // 横の棒（氷）
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x + 3, y - 3.6); ctx.lineTo(bx - 2, by - 2.6); ctx.stroke();
+    ctx.fillStyle = 'rgba(200,236,255,0.96)'; // つらら
+    for (const [k, len] of [[0.3, 9], [0.52, 14], [0.72, 8], [0.92, 11]]) { const ix = x + (bx - x) * k, iy = y + (by - y) * k + 3; ctx.beginPath(); ctx.moveTo(ix - 2.3, iy); ctx.lineTo(ix + 2.3, iy); ctx.lineTo(ix, iy + len); ctx.fill(); }
+    ctx.fillStyle = '#6f9fc8'; ctx.fillRect(x - 3.5, y + 5, 7, gy - y - 5); ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.fillRect(x - 3.5, y + 5, 2, gy - y - 5); // 手前の柱
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(bx, by - 1.5, 6, 3, 0, 0, Math.PI * 2); ctx.fill(); // 柱の上の雪
+    ctx.beginPath(); ctx.ellipse(x, gy - 1, 13, 4, 0, 0, Math.PI * 2); ctx.ellipse(bx, gy - 13, 10, 3, 0, 0, Math.PI * 2); ctx.fill(); // 根もとの雪
+  },
+};
+
+// ================= 北海道を描く =================
+function drawHokkaido(x, y, a, opt = {}) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+  ctx.save(); ctx.translate(4, 6); ctx.fillStyle = 'rgba(0,40,60,0.18)'; ctx.fill(HK.path); ctx.restore(); // 影
+  const g = ctx.createLinearGradient(-90, -90, 90, 90); g.addColorStop(0, '#5fd66b'); g.addColorStop(1, '#2f9e46');
+  ctx.fillStyle = g; ctx.fill(HK.path);
+  ctx.lineJoin = 'round'; ctx.strokeStyle = '#1e6b30'; ctx.lineWidth = 3 * (opt.lw || 1); ctx.stroke(HK.path);
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1.5; ctx.save(); ctx.translate(-1.5, -1.5); ctx.stroke(HK.path); ctx.restore();
+  if (opt.bay) { // 噴火湾（フック）を光らせる
+    const p = 0.5 + 0.5 * Math.sin(G.t * 5);
+    ctx.save(); ctx.strokeStyle = `rgba(255,215,40,${0.55 + p * 0.45})`; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = 10; ctx.lineWidth = 3; ctx.setLineDash([4, 3]); ctx.lineDashOffset = -G.t * 14; ctx.stroke(HK.bay); ctx.restore();
+  }
+  drawFace(opt.face || 'normal', a, opt.lookX || 0, opt.lookY || 0);
+  ctx.restore();
+}
+function drawFace(f, a, lx, ly) { ctx.save(); ctx.scale(FACE_K, FACE_K); drawFace0(f, a, lx, ly); ctx.restore(); }
+function drawFace0(f, a, lx, ly) { // 北海道の顔（体と一緒に回る）
+  const ex = 13, ey = -4, er = 7.5;
+  const c = Math.cos(-a), s = Math.sin(-a), px = (c * lx - s * ly) * 2.6, py = (s * lx + c * ly) * 2.6; // 進む向きを見る
+  ctx.lineCap = 'round';
+  if (f === 'happy') { ctx.strokeStyle = '#163d1f'; ctx.lineWidth = 2.6; for (const sx of [-1, 1]) { ctx.beginPath(); ctx.arc(sx * ex, ey + 2, 5, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke(); } ctx.fillStyle = '#7a2a22'; ctx.beginPath(); ctx.moveTo(-7, 9); ctx.quadraticCurveTo(0, 20, 7, 9); ctx.closePath(); ctx.fill(); ctx.fillStyle = 'rgba(255,120,140,0.5)'; for (const sx of [-1, 1]) { ctx.beginPath(); ctx.ellipse(sx * 22, 8, 5, 3, 0, 0, Math.PI * 2); ctx.fill(); } return; }
+  if (f === 'dizzy') { ctx.strokeStyle = '#163d1f'; ctx.lineWidth = 2.4; for (const sx of [-1, 1]) { ctx.beginPath(); ctx.moveTo(sx * ex - 4, ey - 4); ctx.lineTo(sx * ex + 4, ey + 4); ctx.moveTo(sx * ex + 4, ey - 4); ctx.lineTo(sx * ex - 4, ey + 4); ctx.stroke(); } ctx.beginPath(); ctx.moveTo(-6, 12); ctx.quadraticCurveTo(-2, 8, 0, 12); ctx.quadraticCurveTo(2, 16, 6, 12); ctx.stroke(); return; }
+  const wide = f === 'fly' || f === 'surprise' || f === 'ouch';
+  for (const sx of [-1, 1]) {
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#163d1f'; ctx.lineWidth = 1.8; ctx.beginPath(); ctx.arc(sx * ex, ey, wide ? er + 1.5 : er, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    const blink = f === 'normal' && (G.t % 3.2) < 0.12;
+    if (blink) { ctx.strokeStyle = '#163d1f'; ctx.lineWidth = 2.4; ctx.beginPath(); ctx.moveTo(sx * ex - 5, ey); ctx.lineTo(sx * ex + 5, ey); ctx.stroke(); }
+    else { ctx.fillStyle = '#163d1f'; ctx.beginPath(); ctx.arc(sx * ex + clamp(px, -3, 3), ey + clamp(py, -3, 3), wide ? 3 : 3.8, 0, Math.PI * 2); ctx.fill(); }
+  }
+  ctx.strokeStyle = '#163d1f'; ctx.lineWidth = 2.2; ctx.fillStyle = '#7a2a22';
+  if (wide) { ctx.beginPath(); ctx.ellipse(0, 12, 4, 5.5, 0, 0, Math.PI * 2); ctx.fill(); }
+  else { ctx.beginPath(); ctx.arc(0, 7, 6, 0.25, Math.PI - 0.25); ctx.stroke(); }
+}
+
+// ================= 描画：プレイ =================
+function curFace() { return G.t < G.faceT ? G.face : G.hooked ? 'happy' : 'normal'; }
+function drawPlay() {
+  const s = stg();
+  drawSky(); DECO.tetsubo(BAR.x, BAR.y); drawZone();
+  const sp = Math.hypot(B.vx, B.vy) || 1;
+  if (!G.inBay && !G.hooked && sp > 700) { ctx.save(); ctx.globalAlpha = 0.18; ctx.translate(B.x - B.vx * 0.03, B.y - B.vy * 0.03); ctx.rotate(B.a - B.w * 0.03); ctx.fillStyle = '#fff'; ctx.fill(HK.path); ctx.restore(); } // 残像
+  // 棒の先＋ここに掛ける目印（すり抜け中は北海道のうしろ）
+  const drawKnob = () => {
+    if (!G.hooked && !G.inBay) { const p = 0.5 + 0.5 * Math.sin(G.t * 4); ctx.save(); ctx.strokeStyle = `rgba(255,255,255,${0.4 + p * 0.5})`; ctx.lineWidth = 2; ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(BAR.x, BAR.y, BAR.r + 7 + p * 3, 0, Math.PI * 2); ctx.stroke(); ctx.restore(); }
+    knob(BAR.x, BAR.y, BAR.r, s.mat);
+  };
+  if (G.ghost) drawKnob();
+  drawHokkaido(B.x, B.y, B.a, { bay: !G.hooked, face: curFace(), lookX: B.vx / sp, lookY: B.vy / sp });
+  if (!G.ghost) drawKnob();
+  if (G.inBay && !G.hooked && G.state === 'play') { // 掛かりかけ：あと少しで「カチッ」
+    const k = Math.min(1, G.hookT / HOOK_T);
+    ctx.save(); ctx.strokeStyle = '#ffd23a'; ctx.lineWidth = 4; ctx.lineCap = 'round'; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = 10;
+    ctx.beginPath(); ctx.arc(BAR.x, BAR.y, BAR.r + 12, -Math.PI / 2, -Math.PI / 2 + k * Math.PI * 2); ctx.stroke(); ctx.restore();
+    if (G.hookT > 0.15) text('かかって…!?', W / 2, L.throwY + 64, 22, '#fff', { stroke: 'rgba(0,0,0,0.35)', sw: 6, sc: 1 + 0.06 * Math.sin(G.t * 14) });
+  }
+  if (G.hold) { // つまんでいる所
+    const c = Math.cos(B.a), sn = Math.sin(B.a), ax = B.x + c * G.anc.x - sn * G.anc.y, ay = B.y + sn * G.anc.x + c * G.anc.y;
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(G.fx2, G.fy2); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1e6b30'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(ax, ay, 5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  if (B.y + HK.rad < 0) { const ax = clamp(B.x, 24, W - 110), bob = Math.sin(G.t * 12) * 2; ctx.fillStyle = '#ff5d73'; ctx.beginPath(); ctx.moveTo(ax, 66 + bob); ctx.lineTo(ax - 11, 82 + bob); ctx.lineTo(ax + 11, 82 + bob); ctx.fill(); } // 画面の上に飛び出した時の矢印
+  drawFx();
+  drawHUD();
+  if (G.throws === 0 && !G.hold && G.state === 'play') drawTutorial();
+  if (G.hooked) { const k = Math.min(1, (G.t - G.hookedT) / 0.25); text('ひっかかった!!', W / 2, L.throwY + 62, 30, '#ff7a00', { stroke: '#fff', sw: 7, sc: 0.6 + 0.4 * k + 0.03 * Math.sin(G.t * 12) }); text(`${G.throws}投目`, W / 2, L.throwY + 100, 20, '#2a3a4a', { stroke: '#fff', sw: 5, a: k }); }
+}
+function drawFx() {
+  for (const f of G.fx) {
+    const k = f.t / f.life;
+    if (f.k === 'pop') text(f.s, f.x, f.y - k * 24, f.size, f.col, { a: 1 - Math.max(0, k - 0.6) / 0.4, sc: k < 0.15 ? 0.6 + k / 0.15 * 0.6 : 1.2 - Math.min(0.2, k), stroke: '#fff', sw: 5 });
+    else if (f.k === 'conf') { const x = f.x + f.vx * f.t, y = f.y + f.vy * f.t + 300 * f.t * f.t; ctx.save(); ctx.globalAlpha = 1 - k; ctx.translate(x, y); ctx.rotate(f.rot + f.t * 8); ctx.fillStyle = f.c; ctx.fillRect(-4, -2.5, 8, 5); ctx.restore(); }
+    else if (f.k === 'star') { ctx.save(); ctx.globalAlpha = 1 - k; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; for (let i = 0; i < 6; i++) { const a = i * Math.PI / 3, r0 = 8 + k * 10, r1 = 14 + k * 18; ctx.beginPath(); ctx.moveTo(f.x + Math.cos(a) * r0, f.y + Math.sin(a) * r0); ctx.lineTo(f.x + Math.cos(a) * r1, f.y + Math.sin(a) * r1); ctx.stroke(); } ctx.restore(); }
+  }
+}
+function drawHUD() {
+  ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.shadowColor = 'rgba(0,40,80,0.18)'; ctx.shadowBlur = 8; rrect(8, 8, W - 16, 52, 16); ctx.fill(); ctx.restore();
+  text('1回 掛けたら クリア', 22, 23, 11, '#e5484d', { align: 'left' });
+  text(STAGE.name, 22, 44, 18, '#2a3a4a', { align: 'left' });
+  text('投げた', W - 150, 23, 11, '#5a7a90');
+  text(`${G.throws}回`, W - 150, 44, 20, '#2a3a4a');
+  text('タイム', W - 58, 23, 11, '#5a7a90');
+  text(fmtTime(G.time), W - 58, 44, 17, '#2a3a4a');
+  // リセット・音
+  for (const [p, kind] of [[L.reset, 'reset'], [L.mute, 'mute']]) {
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.beginPath(); ctx.arc(p.x, p.y, 16, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#2a3a4a'; ctx.fillStyle = '#2a3a4a'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+    if (kind === 'reset') { ctx.beginPath(); ctx.arc(p.x, p.y, 7, -0.5, Math.PI * 1.5); ctx.stroke(); ctx.beginPath(); ctx.moveTo(p.x + 7, p.y - 9); ctx.lineTo(p.x + 7, p.y - 3); ctx.lineTo(p.x + 1, p.y - 3); ctx.stroke(); }
+    else { ctx.beginPath(); ctx.moveTo(p.x - 7, p.y - 3); ctx.lineTo(p.x - 3, p.y - 3); ctx.lineTo(p.x + 2, p.y - 7); ctx.lineTo(p.x + 2, p.y + 7); ctx.lineTo(p.x - 3, p.y + 3); ctx.lineTo(p.x - 7, p.y + 3); ctx.closePath(); ctx.fill(); if (muted) { ctx.beginPath(); ctx.moveTo(p.x + 5, p.y - 4); ctx.lineTo(p.x + 11, p.y + 4); ctx.moveTo(p.x + 11, p.y - 4); ctx.lineTo(p.x + 5, p.y + 4); ctx.stroke(); } else { ctx.beginPath(); ctx.arc(p.x + 3, p.y, 5, -0.8, 0.8); ctx.stroke(); } }
+  }
+  // お知らせ・コツ
+  if (G.said && G.t - G.saidT < G.saidDur) {
+    const k = (G.t - G.saidT) / G.saidDur, a = k > 0.85 ? (1 - k) / 0.15 : 1;
+    const lines = G.said.split('\n'), fs = lines.length > 1 ? 13 : G.said.length > 22 ? 12 : 14, lh = fs + 6; // 2行にも対応
+    ctx.save(); ctx.globalAlpha = a; ctx.font = `800 ${fs}px ${FONT}`; const tw = Math.min(W - 24, Math.max(...lines.map(l => ctx.measureText(l).width)) + 26), bh = 14 + lines.length * lh;
+    const bx = 8 + Math.min(tw, W - 96) / 2; // 右の丸ボタン2つをよける
+    ctx.fillStyle = 'rgba(30,50,70,0.88)'; rrect(8, 66, Math.min(tw, W - 96), bh, 15); ctx.fill(); ctx.restore();
+    lines.forEach((l, i) => text(l, bx, 66 + 7 + lh * (i + 0.5) + 1, fs, '#fff', { a }));
+  }
+}
+function drawTutorial() { // 1ステージ目の遊び方
+  const t = (G.t % 2.2) / 2.2, c = Math.cos(B.a), s = Math.sin(B.a), sx = B.x + c * G.seat.x - s * G.seat.y, sy = B.y + s * G.seat.x + c * G.seat.y;
+  text('噴火湾', sx - 46, sy - 6, 13, '#ffd23a', { stroke: '#1e3a28', sw: 4 });
+  ctx.strokeStyle = '#ffd23a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(sx - 24, sy - 2); ctx.lineTo(sx - 6, sy + 2); ctx.stroke();
+  const px = B.x + c * GRIP.x - s * GRIP.y, py = B.y + s * GRIP.x + c * GRIP.y; // ★をつまむ手
+  const hx = px + 4, hy = py + 12 - (t > 0.35 ? (t - 0.35) * 260 : 0);
+  ctx.save(); ctx.globalAlpha = t > 0.85 ? (1 - t) / 0.15 : 1; drawHand(hx, hy); ctx.restore();
+  text('つまんで 上にスワイプ!', W / 2, L.GY + 15, 13, '#2a5f8f', { stroke: 'rgba(255,255,255,0.9)', sw: 4 });
+}
+function drawHand(x, y) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.fillStyle = '#fff'; ctx.strokeStyle = '#2a3a4a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(-3, 0); ctx.lineTo(-3, -18); ctx.arc(0, -18, 3, Math.PI, 0); ctx.lineTo(3, -6); ctx.lineTo(13, -4); ctx.quadraticCurveTo(17, 4, 12, 16); ctx.lineTo(-4, 16); ctx.quadraticCurveTo(-10, 8, -9, 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+// ================= 描画：タイトル・結果 =================
+function drawHanging(kx, ky, k, sway) { // 鉄棒に ぶら下がって 揺れている北海道
+  const a = EQ_ANG + Math.sin(G.t * sway) * 0.2, sd = seatFor(BAR_R), c = Math.cos(a), s = Math.sin(a);
+  DECO.tetsubo(kx, ky);
+  ctx.save(); ctx.translate(kx, ky); ctx.scale(k, k);
+  drawHokkaido(-(c * sd.x - s * sd.y), -(s * sd.x + c * sd.y), a, { face: 'happy', lw: 0.7 });
+  knob(0, 0, BAR_R, 'ice'); ctx.restore();
+}
+function muteBtn(px, py) {
+  ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.beginPath(); ctx.arc(px, py, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2a3a4a'; ctx.strokeStyle = '#2a3a4a'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(px - 7, py - 3); ctx.lineTo(px - 3, py - 3); ctx.lineTo(px + 2, py - 7); ctx.lineTo(px + 2, py + 7); ctx.lineTo(px - 3, py + 3); ctx.lineTo(px - 7, py + 3); ctx.closePath(); ctx.fill();
+  if (muted) { ctx.beginPath(); ctx.moveTo(px + 5, py - 4); ctx.lineTo(px + 11, py + 4); ctx.moveTo(px + 11, py - 4); ctx.lineTo(px + 5, py + 4); ctx.stroke(); } else { ctx.beginPath(); ctx.arc(px + 3, py, 5, -0.8, 0.8); ctx.stroke(); }
+}
+function drawTitle() {
+  drawSky();
+  const tb = titleBtns();
+  drawHanging(W / 2 + 34, H * (tb.run ? 0.43 : 0.47), SHOW_K * (tb.run ? 0.9 : 1), 2.1);
+  const bob = Math.sin(G.t * 3) * 3;
+  text('ホッカイドウ', W / 2, H * 0.14 + bob, 40, '#2f9e46', { stroke: '#fff', sw: 9 });
+  text('ハンガー', W / 2, H * 0.14 + 46 + bob, 46, '#ff7a00', { stroke: '#fff', sw: 10 });
+  text('凍った鉄棒に 噴火湾を 引っ掛けろ!', W / 2, H * 0.14 + 92, 15, '#2a3a4a', { stroke: 'rgba(255,255,255,0.85)', sw: 5 });
+  text('※ 鬼畜：1回 掛けられたら クリア（つるつる注意）', W / 2, H * 0.14 + 116, 11, '#e5484d', { stroke: 'rgba(255,255,255,0.9)', sw: 4 });
+  const pul = 1 + Math.sin(G.t * 5) * 0.03, bigBtn = (b, label, sub) => {
+    ctx.save(); ctx.translate(W / 2, b.y + b.h / 2); ctx.scale(pul, pul); ctx.fillStyle = '#ff7a00'; ctx.shadowColor = 'rgba(160,70,0,0.5)'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 5; rrect(-b.w / 2, -b.h / 2, b.w, b.h, 30); ctx.fill(); ctx.restore();
+    text(label, W / 2, b.y + b.h / 2 + (sub ? -8 : 1), 24, '#fff', { sc: pul });
+    if (sub) text(sub, W / 2, b.y + b.h / 2 + 15, 12, '#fff', { w: 500 });
+  };
+  let lastY;
+  if (tb.run) {
+    bigBtn(tb.cont, 'つづきから', `ここまで ${tb.run.throws}投・${fmtTime(tb.run.time || 0)}`);
+    const f = tb.fresh, armed = G.t - (G.freshT || -9) < 2.5;
+    ctx.fillStyle = armed ? '#e5484d' : 'rgba(255,255,255,0.95)'; rrect(f.x, f.y, f.w, f.h, 20); ctx.fill();
+    text(armed ? 'もう一度タップで リセット' : 'はじめから', W / 2, f.y + f.h / 2 + 1, armed ? 12 : 15, armed ? '#fff' : '#2a3a4a');
+    lastY = f.y + f.h;
+    if (tb.giveup) { const g = tb.giveup; ctx.fillStyle = '#111'; rrect(g.x, g.y, g.w, g.h, 15); ctx.fill(); text('「まだ掛からない…」を Xでシェア', W / 2, g.y + g.h / 2 + 1, 12, '#fff'); lastY = g.y + g.h; }
+  } else {
+    bigBtn(tb.start, 'スタート');
+    text('つまんで 上にスワイプして 投げる', W / 2, tb.start.y - 22, 13, '#2a3a4a', { w: 500, stroke: 'rgba(255,255,255,0.8)', sw: 4 });
+    lastY = tb.start.y + tb.start.h;
+  }
+  const best = store.get('hh2_best', null);
+  if (best !== null) text(`自己ベスト ${best}投目で クリア`, W / 2, lastY + 15, 12, '#2a3a4a', { w: 500 });
+  text('N.K. Works', W / 2, H - 9, 10, '#6f93b3', { w: 500 });
+  muteBtn(W - 24, 26);
+}
+function drawResult() {
+  drawSky();
+  const t = since(), R = G.res, rk = rankOf(R.n);
+  drawHanging(W / 2 + 40, 118 + (H - 600) * 0.14, SHOW_K * 0.78, 1.8);
+  text('クリア!!', W / 2 - 88, 104 + (H - 600) * 0.14, 30, '#ff7a00', { stroke: '#fff', sw: 7, rot: -0.08 });
+  // 記録
+  const shown = Math.round(R.n * Math.min(1, t / 1.2)), y0 = Math.round((250 + (H - 100)) / 2 - 62);
+  ctx.save(); ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.shadowColor = 'rgba(0,40,80,0.18)'; ctx.shadowBlur = 10; rrect(16, y0 - 40, W - 32, 196, 18); ctx.fill(); ctx.restore();
+  text('凍った鉄棒に', W / 2, y0 - 18, 13, '#5a7a90');
+  text(`${shown}投目`, W / 2, y0 + 22, 50, '#ff7a00');
+  text('で 引っ掛けた!', W / 2, y0 + 62, 15, '#2a3a4a');
+  text(`タイム ${fmtTime(R.time)}`, W / 2, y0 + 86, 13, '#5a7a90', { w: 500 });
+  if (t > 1.3) {
+    ctx.fillStyle = '#eef5fb'; rrect(32, y0 + 100, W - 64, 46, 12); ctx.fill();
+    text(rk[0], W / 2, y0 + 115, rk[0].length > 9 ? 16 : 18, '#2a3a4a');
+    text(rk[1], W / 2, y0 + 135, 11.5, '#5a7a90', { w: 500 });
+  }
+  if (t > 1.5 && R.newBest) text('自己ベスト更新!!', W / 2, y0 - 56, 18, '#ff5d73', { stroke: '#fff', sw: 5, sc: 1 + Math.max(0, 0.2 - (t - 1.5)) * 2, rot: -0.05 });
+  else if (t > 1.5 && !R.first) text(`自己ベスト ${R.best}投目`, W / 2, y0 - 56, 12, '#2a5f8f', { w: 500, stroke: 'rgba(255,255,255,0.8)', sw: 4 });
+  if (t > 0.8) {
+    const b = resultBtns();
+    ctx.fillStyle = '#fff'; rrect(b.retry.x, b.retry.y, b.retry.w, b.retry.h, 25); ctx.fill(); text('もう一度', b.retry.x + b.retry.w / 2, b.retry.y + b.retry.h / 2 + 1, 18, '#2a3a4a');
+    ctx.fillStyle = '#111'; rrect(b.share.x, b.share.y, b.share.w, b.share.h, 25); ctx.fill(); text('Xでシェア', b.share.x + b.share.w / 2, b.share.y + b.share.h / 2 + 1, 18, '#fff');
+    text('タイトルへ', W / 2, b.menu.y + 14, 13, '#2a5f8f', { w: 500 });
+  }
+}
+
+function render() {
+  ctx.setTransform(DPR * S, 0, 0, DPR * S, 0, 0);
+  if (G.shake > 0) { const a = G.shake * 12; ctx.translate((Math.random() - 0.5) * a, (Math.random() - 0.5) * a); }
+  if (G.state === 'title') drawTitle();
+  else if (G.state === 'result') drawResult();
+  else drawPlay();
+  ctx.setTransform(DPR * S, 0, 0, DPR * S, 0, 0);
+  if (G.flash > 0) { ctx.save(); ctx.globalAlpha = G.flash * 0.5; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H); ctx.restore(); }
+}
+
+// ================= ループ =================
+resize();
+let last = performance.now();
+function frame(nw) { requestAnimationFrame(frame); const dt = Math.max(0, Math.min(1 / 30, (nw - last) / 1000)); last = nw; if (!(window.__hh && window.__hh.paused)) update(dt); render(); }
+requestAnimationFrame(frame);
+if (document.fonts && document.fonts.load) document.fonts.load('800 20px \'M PLUS Rounded 1c\'', 'ホッカイドウハンガー北海道を噴火湾で凍った鉄棒に引っ掛けろスタートつづきからはじめ投げた回タイム目クリア鬼畜つるつる注意0123456789:').catch(() => { });
+
+// テスト用（遊びには影響しません）
+window.__hh = { G, B, BAR, L, HK, STAGE, STAGES: [STAGE], update, startGame, startStage, startPlay, placeBar, grabAt, moveFinger, release, seatFor, EQ_ANG, inBay, hookNow, finishGame, GRIP, W };
+})();
+</script>
+</body>
+</html>
