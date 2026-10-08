@@ -172,7 +172,7 @@ const SFX = {
 function buzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (e) { } }
 
 // ================= ゲームの状態 =================
-const G = { state: 'title', t: 0, st: 0, fx: [], shake: 0, flash: 0, throws: 0, time: 0 };
+const G = { state: 'title', t: 0, st: 0, fx: [], shake: 0, flash: 0, throws: 0, time: 0 }; window.__nkwG = G;
 const B = { x: 180, y: 400, a: 0, vx: 0, vy: 0, w: 0 }; // 北海道（剛体）
 const BAR = { x: 180, y: 200, r: BAR_R, vx: 0, vy: 0, bx: 180, by: 200 };
 const since = () => G.t - G.ts;
@@ -720,5 +720,10 @@ if (document.fonts && document.fonts.load) document.fonts.load('800 20px \'M PLU
 window.__hh = { G, B, BAR, L, HK, STAGE, STAGES: [STAGE], update, startGame, startStage, startPlay, placeBar, grabAt, moveFinger, release, seatFor, EQ_ANG, inBay, hookNow, finishGame, GRIP, W };
 })();
 </script>
+<!-- nkw-ikkaku --><style>.nkw-ikk{display:inline-block;box-sizing:border-box;max-width:92vw;padding:5px 14px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid rgba(60,90,120,.35);color:#3c5a78;font:500 12.5px/1.4 "Hiragino Sans","Noto Sans JP",system-ui,sans-serif;text-decoration:none;white-space:nowrap;letter-spacing:.02em}#nkw-ikk{position:fixed;z-index:2147483000;transform:translate(-50%,-50%);transition:opacity .3s;box-shadow:0 2px 8px rgba(0,0,0,.12)}#nkw-ikk[hidden]{display:none}</style>
+<a id="nkw-ikk" class="nkw-ikk" href="https://nkworks-games.com/ikkaku-ichie/?from=hokkaido-hanger" target="_blank" rel="noopener" hidden>漢字パズル「一画一会」体験版 ›</a>
+<script>(function(){var a=document.getElementById("nkw-ikk"),since=0;
+function cv(){var b=null,m=0;document.querySelectorAll("canvas").forEach(function(c){var r=c.getBoundingClientRect();if(r.width*r.height>m){m=r.width*r.height;b=r;}});return b;}
+setInterval(function(){var G=window.__nkwG,show=false;try{if(G&&(G.state==='result')){if(!since)since=Date.now();if(Date.now()-since>1500){var r=cv();if(r){var S=r.width/360,H=r.height/S,y=(function(){var y0=Math.round((150+H)/2-62),a=y0+160,b=H-92;return b-a>=30?(a+b)/2:null})();if(y!=null){a.style.left=(r.left+r.width/2)+"px";a.style.top=(r.top+y*S)+"px";show=true;}}}}else since=0;}catch(e){}a.hidden=!show;},250);})();</script>
 </body>
 </html>
